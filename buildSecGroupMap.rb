@@ -62,7 +62,7 @@ class Allcolors
 
   def initialize
     @allcolors=Graph::LIGHT_COLORS + Graph::BOLD_COLORS
-    @allcolors.delete_if {|c| c=~/^(purple|mediumblue|white|black|maroon|darkgreen|midnightblue|darkviolet|darkorchid|royalblue)$/}
+    @allcolors.delete_if {|c| c=~/^(purple|mediumblue|indigo|lightseagreen|navy|white|black|maroon|darkgreen|midnightblue|darkviolet|darkorchid|royalblue)$/}
     @clength=@allcolors.length-1
     @ptr=0
   end
@@ -75,6 +75,7 @@ class Allcolors
   end
 end
 
+#Parse cmdline opts.
 cli=Options.new
 cli.parse_options
 
@@ -89,7 +90,13 @@ fogobj = Fog::Compute.new(
     :aws_access_key_id => ENV['AWS_ACCESS_KEY_ID'],
     :aws_secret_access_key => ENV['AWS_SECRET_ACCESS_KEY']
 )
-raw=fogobj.describe_security_groups.body['securityGroupInfo'].reject {|x| x['groupName']=~/OpsWorks/ || x['ipPermissions'].length==0}
+raw=[]
+begin
+	raw=fogobj.describe_security_groups.body['securityGroupInfo'].reject {|x| x['groupName']=~/OpsWorks/ || x['ipPermissions'].length==0}
+rescue Exception => e
+	$stderr.puts "Could not describe-groups - #{e.inspect}"
+	exit 1
+end
 #puts JSON.pretty_generate(raw)
 
 sghash=Hash.new #sg-xxx => sg-description
@@ -139,15 +146,23 @@ digraph do
 		srcdesc=sghash.has_key?(thissrc) ? sghash[thissrc] : thissrc
 		colmap[srcdesc]=send(colors.getNext) unless colmap.has_key?(srcdesc)  
 		n=node(srcdesc)
-		n.attributes << colmap[srcdesc] + filled
+		n.attributes << colmap[srcdesc]
+		if srcdesc=~/^Host /
+			n.attributes << bold + diagonals
+			mdiamond << n
+		elsif srcdesc=~/amazon-elb-sg/
+			n.attributes << bold + filled
+			box3d << n
+		else
+			n.attributes << filled
+		end
 		iphosts << srcdesc if srcdesc=~/^Host /
 		sources[thissrc]['allowed_into'].keys.sort.each do |thistgt|
 			thistgt=sghash.has_key?(thistgt) ? sghash[thistgt] : thistgt
 			note=groupByProto(sources[thissrc]['allowed_into'][thistgt])
 			colmap[thistgt]=send(colors.getNext) unless colmap.has_key?(thistgt)		
 			t=node(thistgt)
-			t.attributes << colmap[thistgt]
-			t.attributes << filled
+			t.attributes << colmap[thistgt] + filled
 			edge(srcdesc, thistgt).label(note).attributes << colmap[srcdesc] #Edge set to same color as SRC
 		end		
 	end	
