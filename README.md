@@ -35,7 +35,6 @@ How to run
 Make sure you have the AWS key id and secret key set. e.g.
 
 ```
-
 export AWS_ACCESS_KEY_ID="somekeyid"
 export AWS_SECRET_ACCESS_KEY="somesecret"
 
