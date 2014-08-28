@@ -5,6 +5,34 @@ require 'digest/md5'
 require 'graph'
 require 'mixlib/cli'
 
+class Options
+  include Mixlib::CLI
+  option :region, :short =>'-r REGION', :long => '--region REGION',:default => 'us-west-2',:description => "AWS Region for which to describe Security groups"
+  option :srcre, :short => '-s SRC', :long => '--source SOURCE', :default => '.*', :description => 'Regexp to filter results to match by Source IP/Groups/Groupname. Default is to match all.'
+  option :dstre, :short => '-d DEST', :long => '--dest DEST', :default => '.*', :description => 'Regexp to filter results to match by Destination SecGroup. Default is to match all.'
+  option :help, :short =>'-h', :long => '--help', :boolean => true, :default => false, :description => "Show this Help message.", :show_options => true, :exit => 0
+  option :nograph, :short =>'-n', :long => '--nograph', :boolean => true, :default => false,:description => "Disable PNG/SVG object generation. False by default."
+  option :json, :short => '-j', :long => '--json', :boolean => true, :default => false, :description => "Dump the JSON from which SVG/PNG is built"
+  option :filename, :short => '-f FILENAME', :long => '--filename FILENAME', :default => "/tmp/sgmap", :description => "Filename (no svg/png suffix) to dump map into. Defaults to /tmp/sgmap(.svg)"
+  option :format, :short => '-m FORMAT', :long => '--mode FORMAT', :default => 'svg', :description => "svg/png only - For generated graph. Defaults to svg"
+end
+
+#Send a graphviz color each time (and rotate back to front when done) - Excludes certain colors intentionally.
+class ColorGen
+  def initialize
+    @allcolors=Graph::LIGHT_COLORS + Graph::BOLD_COLORS
+    @allcolors.delete_if {|c| c=~/^(purple|mediumblue|indigo|lightseagreen|navy|lightcyan|white|black|maroon|darkgreen|midnightblue|darkviolet|darkorchid|royalblue)$/}
+    @clength=@allcolors.length-1
+    @ptr=0
+  end
+  def getNext
+    col=@allcolors[@ptr]
+    @ptr+=1
+    @ptr=0 if @ptr > @clength
+    return col
+  end
+end
+
 ELBDESC='amazon-elb-sg'
 ANYWHERE='0.0.0.0/0'
 
@@ -44,36 +72,36 @@ def groupByProto(x=Array.new)
 	return str
 end
 
-class Options 
-	include Mixlib::CLI
-
-	option :region, :short =>'-r REGION', :long => '--region REGION',:default => 'us-west-2',:description => "AWS Region for which to describe Security groups"
-	option :srcre, :short => '-s SRC', :long => '--source SOURCE', :default => '.*', :description => 'Regexp to filter results to match by Source IP/Groups/Groupname. Default is to match all.'
-	option :dstre, :short => '-d DEST', :long => '--dest DEST', :default => '.*', :description => 'Regexp to filter results to match by Destination SecGroup. Default is to match all.'
-	option :help, :short =>'-h', :long => '--help', :boolean => true, :default => false, :description => "Show this Help message.", :show_options => true, :exit => 0
-	option :nograph, :short =>'-n', :long => '--nograph', :boolean => true, :default => false,:description => "Disable PNG/SVG object generation. False by default."
-	option :json, :short => '-j', :long => '--json', :boolean => true, :default => false, :description => "Dump the JSON from which SVG/PNG is built"
-	option :filename, :short => '-f FILENAME', :long => '--filename FILENAME', :default => "/tmp/sgmap", :description => "Filename (no svg/png suffix) to dump map into. Defaults to /tmp/sgmap(.svg)"
-	option :format, :short => '-m FORMAT', :long => '--mode FORMAT', :default => 'svg', :description => "svg/png only - For generated graph. Defaults to svg"
+def describe_ec2_secgroup(region="")
+	fogobj = Fog::Compute.new(
+		:provider => 'AWS',
+		:region => region,
+		:aws_access_key_id => ENV['AWS_ACCESS_KEY_ID'],
+		:aws_secret_access_key => ENV['AWS_SECRET_ACCESS_KEY']
+	)
+	begin
+		$stderr.puts "Describing EC2 security groups..."
+		return fogobj.describe_security_groups.body['securityGroupInfo'].reject {|x| x['groupName']=~/OpsWorks/ || x['ipPermissions'].length==0}
+	rescue Exception => e
+		abort "Failed to fetch EC2 sec groups! - #{e.inspect}"
+	end		
 end
 
-#Send a graphviz color each time (and rotate back to front when done) - Excludes certain colors intentionally.
-class Allcolors
-
-  def initialize
-    @allcolors=Graph::LIGHT_COLORS + Graph::BOLD_COLORS
-    @allcolors.delete_if {|c| c=~/^(purple|mediumblue|indigo|lightseagreen|navy|white|black|maroon|darkgreen|midnightblue|darkviolet|darkorchid|royalblue)$/}
-    @clength=@allcolors.length-1
-    @ptr=0
-  end
-
-  def getNext
-    col=@allcolors[@ptr]
-    @ptr+=1
-    @ptr=0 if @ptr > @clength
-    return col
-  end
+def describe_cache_secgroup(region="")
+	fogobj=Fog::AWS::Elasticache.new(
+		:region => region,
+		:aws_access_key_id => ENV['AWS_ACCESS_KEY_ID'],
+		:aws_secret_access_key => ENV['AWS_SECRET_ACCESS_KEY']
+	)
+	begin
+		$stderr.puts "Describing Elastic Cache Security groups..."
+		return fogobj.describe_cache_security_groups.body['CacheSecurityGroups']
+	rescue Exception => e
+		abort "Failed to fetch Elastic Cache security groups! - #{e.inspect}"
+	end
 end
+
+### Work starts here...
 
 #Parse cmdline opts.
 cli=Options.new
@@ -84,27 +112,18 @@ SrcRe=Regexp.new(cli.config[:srcre])
 DstRe=Regexp.new(cli.config[:dstre])
 abort "No region specified in config." if THISREGION.nil?
 
-fogobj = Fog::Compute.new(
-    :provider => 'AWS',
-    :region => THISREGION,
-    :aws_access_key_id => ENV['AWS_ACCESS_KEY_ID'],
-    :aws_secret_access_key => ENV['AWS_SECRET_ACCESS_KEY']
-)
-raw=[]
-begin
-	raw=fogobj.describe_security_groups.body['securityGroupInfo'].reject {|x| x['groupName']=~/OpsWorks/ || x['ipPermissions'].length==0}
-rescue Exception => e
-	$stderr.puts "Could not describe-groups - #{e.inspect}"
-	exit 1
-end
-#puts JSON.pretty_generate(raw)
+ec2sec=describe_ec2_secgroup(THISREGION)
+cachesec=describe_cache_secgroup(THISREGION)
 
 sghash=Hash.new #sg-xxx => sg-description
-sources=Hash.new
+allsources=Hash.new
+cachesecmap=Hash.new #Elastic cache sec groups use lower case description of EC2 sec group name and not its ID :-( So map desc.lowcase -> sg-xxxx
 
-raw.each do |thisg|
+#First process all EC2 security group info.
+ec2sec.each do |thisg|
 	tgtgroupdesc=getGroupDesc(thisg)
 	sghash[ thisg['groupId' ] ]=tgtgroupdesc
+	cachesecmap[ thisg['groupName'].downcase ] = thisg['groupId']	#well, >1 groups could have the same description... :-(
 	next unless tgtgroupdesc.match(DstRe)
 	thisg['ipPermissions'].each do |this_allowed|
 		proto_port_combo=this_allowed['ipProtocol']+":"+this_allowed['toPort'].to_s
@@ -113,59 +132,78 @@ raw.each do |thisg|
 		this_allowed['groups'].each do |x|
 			#srcid=getGroupDesc(x)	
 			if x.has_key?('userId') && x['userId']=='amazon-elb'
-				sghash[ thisg['groupId' ] ]=x['groupId'] + "(#{ELBDESC})"
+				sghash[ x['groupId' ] ]=x['groupId'] + " (#{ELBDESC})"
 			end
 			srcid=x['groupId']
 			next unless srcid.match(SrcRe)
-			sources[srcid]={'allowed_into'=>Hash.new} unless sources.has_key?(srcid)
-			sources[srcid]['allowed_into'][tgtgroupdesc]=[] unless sources[srcid]['allowed_into'].has_key?(tgtgroupdesc)
-			sources[srcid]['allowed_into'][tgtgroupdesc].push(proto_port_combo)			
+			allsources[srcid]={'allowed_into'=>Hash.new} unless allsources.has_key?(srcid)
+			allsources[srcid]['allowed_into'][tgtgroupdesc]=[] unless allsources[srcid]['allowed_into'].has_key?(tgtgroupdesc)
+			allsources[srcid]['allowed_into'][tgtgroupdesc].push(proto_port_combo)			
 		end	
 		this_allowed['ipRanges'].each do |y|
 			srcid=getSubnetDesc(y['cidrIp'])
 			next unless srcid.match(SrcRe)
-			sources[srcid]={'allowed_into'=>Hash.new} unless sources.has_key?(srcid)
-			sources[srcid]['allowed_into'][tgtgroupdesc]=[] unless sources[srcid]['allowed_into'].has_key?(tgtgroupdesc)
-			sources[srcid]['allowed_into'][tgtgroupdesc].push(proto_port_combo)
+			allsources[srcid]={'allowed_into'=>Hash.new} unless allsources.has_key?(srcid)
+			allsources[srcid]['allowed_into'][tgtgroupdesc]=[] unless allsources[srcid]['allowed_into'].has_key?(tgtgroupdesc)
+			allsources[srcid]['allowed_into'][tgtgroupdesc].push(proto_port_combo)
 		end				
 	end	
 end
 
+#Now process the elastic cache security groups too
+cachesec.each do |thiscgrp|
+	gname=thiscgrp['CacheSecurityGroupName']
+	thiscgrp['EC2SecurityGroups'].each do |ec2grp|
+		name=ec2grp['EC2SecurityGroupName']
+		id=cachesecmap.has_key?(name) ? cachesecmap[name] : name
+		allsources[id]={'allowed_into' => Hash.new} unless allsources.has_key?(id)
+		allsources[id]['allowed_into']['CacheGrp:'+name]=[] unless allsources[id]['allowed_into'].has_key?('CacheGrp:'+name)
+		allsources[id]['allowed_into']['CacheGrp:'+name].push('cache')	
+	end	
+end
 
-puts JSON.pretty_generate(sources) if cli.config[:json]
-exit if cli.config[:nograph]
+puts JSON.pretty_generate(allsources) if cli.config[:json]
+if cli.config[:nograph]
+	$stderr.puts "Skipping SVG/PNG generation since nograph was set"
+	exit
+end
 
-colors=Allcolors.new
+colors=ColorGen.new
 colmap=Hash.new
 
-iphosts=[]
-#Try to graph it. Each key in sources will be a node
+#Try to graph it. Each key in allsources will be a node
 digraph do
+	orient "LR"
 	label "Security Groups in #{THISREGION.upcase}"
-	sources.keys.sort.each do |thissrc|
+	allsources.keys.sort.each do |thissrc|
 		srcdesc=sghash.has_key?(thissrc) ? sghash[thissrc] : thissrc
 		colmap[srcdesc]=send(colors.getNext) unless colmap.has_key?(srcdesc)  
 		n=node(srcdesc)
 		n.attributes << colmap[srcdesc]
-		if srcdesc=~/^Host /
+		if srcdesc=~/^Host |^IP-Subnet /
 			n.attributes << bold + diagonals
 			mdiamond << n
 		elsif srcdesc=~/amazon-elb-sg/
-			n.attributes << bold + filled
+			n.attributes << bold
 			box3d << n
+		elsif srcdesc=~/^CacheGrp/ #In hindsight, elastic cache sec group wont ever be a source
+			n.attributes << trapezium
 		else
-			n.attributes << filled
+			n.attributes << solid + parallelogram
 		end
-		iphosts << srcdesc if srcdesc=~/^Host /
-		sources[thissrc]['allowed_into'].keys.sort.each do |thistgt|
-			thistgt=sghash.has_key?(thistgt) ? sghash[thistgt] : thistgt
-			note=groupByProto(sources[thissrc]['allowed_into'][thistgt])
-			colmap[thistgt]=send(colors.getNext) unless colmap.has_key?(thistgt)		
-			t=node(thistgt)
-			t.attributes << colmap[thistgt] + filled
-			edge(srcdesc, thistgt).label(note).attributes << colmap[srcdesc] #Edge set to same color as SRC
+		allsources[thissrc]['allowed_into'].keys.sort.each do |thistgt|
+			thistgtdesc=sghash.has_key?(thistgt) ? sghash[thistgt] : thistgt
+			note=groupByProto(allsources[thissrc]['allowed_into'][thistgt])
+			t=node(thistgtdesc)
+			if thistgtdesc=~/^CacheGrp:/
+				t.attributes << trapezium + bold
+			else
+				colmap[thistgtdesc]=send(colors.getNext) unless colmap.has_key?(thistgt)
+				t.attributes << colmap[thistgtdesc] + filled
+			end
+			edge(srcdesc, thistgtdesc).label(note).attributes << colmap[srcdesc] #Edge set to same color as SRC
 		end		
-	end	
+	end
 
 	save cli.config[:filename], cli.config[:format]
 end
