@@ -57,6 +57,24 @@ class Options
 	option :format, :short => '-m FORMAT', :long => '--mode FORMAT', :default => 'svg', :description => "svg/png only - For generated graph. Defaults to svg"
 end
 
+#Send a graphviz color each time (and rotate back to front when done) - Excludes certain colors intentionally.
+class Allcolors
+
+  def initialize
+    @allcolors=Graph::LIGHT_COLORS + Graph::BOLD_COLORS
+    @allcolors.delete_if {|c| c=~/^(purple|mediumblue|white|black|maroon|darkgreen|midnightblue|darkviolet|darkorchid|royalblue)$/}
+    @clength=@allcolors.length-1
+    @ptr=0
+  end
+
+  def getNext
+    col=@allcolors[@ptr]
+    @ptr+=1
+    @ptr=0 if @ptr > @clength
+    return col
+  end
+end
+
 cli=Options.new
 cli.parse_options
 
@@ -110,22 +128,6 @@ end
 puts JSON.pretty_generate(sources) if cli.config[:json]
 exit if cli.config[:nograph]
 
-class Allcolors
-
-	def initialize
-		@allcolors=Graph::LIGHT_COLORS + Graph::BOLD_COLORS
-		@allcolors.delete_if {|c| c=~/^(purple|mediumblue|white|black|maroon|darkgreen|midnightblue|darkviolet|darkorchid|royalblue)$/}
-		@clength=@allcolors.length-1
-		@ptr=0
-	end
-
-	def getNext
-		col=@allcolors[@ptr]
-		@ptr+=1
-		@ptr=0 if @ptr > @clength
-		return col	
-	end	
-end
 colors=Allcolors.new
 colmap=Hash.new
 
