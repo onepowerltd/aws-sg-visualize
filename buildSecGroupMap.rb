@@ -17,20 +17,18 @@ class Options
   option :format, :short => '-m FORMAT', :long => '--mode FORMAT', :default => 'svg', :description => "svg/png only - For generated graph. Defaults to svg"
 end
 
-#Send a graphviz color each time (and rotate back to front when done) - Excludes certain colors intentionally.
-class ColorGen
-  def initialize
-    @allcolors=Graph::LIGHT_COLORS + Graph::BOLD_COLORS
-    @allcolors.delete_if {|c| c=~/^(purple|mediumblue|indigo|lightseagreen|navy|lightcyan|white|black|maroon|darkgreen|midnightblue|darkviolet|darkorchid|royalblue)$/}
-    @clength=@allcolors.length-1
-    @ptr=0
-  end
-  def getNext
-    col=@allcolors[@ptr]
-    @ptr+=1
-    @ptr=0 if @ptr > @clength
-    return col
-  end
+class ColorRand
+	def initialize
+		@used=Hash.new
+	end
+
+	def getNext
+		thiscol="%06x" % (rand * 0xffffff)
+		while ( @used.has_key?(thiscol))
+			thiscol="%06x" % (rand * 0xffffff)
+		end		
+		return "color = \"##{thiscol}\""
+	end
 end
 
 ELBDESC='amazon-elb-sg'
@@ -119,8 +117,10 @@ sghash=Hash.new #sg-xxx => sg-description
 allsources=Hash.new
 cachesecmap=Hash.new #Elastic cache sec groups use lower case description of EC2 sec group name and not its ID :-( So map desc.lowcase -> sg-xxxx
 
+colorctr=0
 #First process all EC2 security group info.
 ec2sec.each do |thisg|
+	colorctr+=1
 	tgtgroupdesc=getGroupDesc(thisg)
 	sghash[ thisg['groupId' ] ]=tgtgroupdesc
 	cachesecmap[ thisg['groupName'].downcase ] = thisg['groupId']	#well, >1 groups could have the same description... :-(
@@ -130,6 +130,7 @@ ec2sec.each do |thisg|
 		proto_port_combo="ANY" if proto_port_combo=="-1:"
 		#The "source" could be either a IP subnet or another security group.
 		this_allowed['groups'].each do |x|
+			colorctr+=1
 			#srcid=getGroupDesc(x)	
 			if x.has_key?('userId') && x['userId']=='amazon-elb'
 				sghash[ x['groupId' ] ]=x['groupId'] + " (#{ELBDESC})"
@@ -141,6 +142,7 @@ ec2sec.each do |thisg|
 			allsources[srcid]['allowed_into'][tgtgroupdesc].push(proto_port_combo)			
 		end	
 		this_allowed['ipRanges'].each do |y|
+			colorctr+=1
 			srcid=getSubnetDesc(y['cidrIp'])
 			next unless srcid.match(SrcRe)
 			allsources[srcid]={'allowed_into'=>Hash.new} unless allsources.has_key?(srcid)
@@ -150,8 +152,10 @@ ec2sec.each do |thisg|
 	end	
 end
 
+
 #Now process the elastic cache security groups too
 cachesec.each do |thiscgrp|
+	colorctr+=1
 	gname=thiscgrp['CacheSecurityGroupName']
 	thiscgrp['EC2SecurityGroups'].each do |ec2grp|
 		name=ec2grp['EC2SecurityGroupName']
@@ -168,7 +172,7 @@ if cli.config[:nograph]
 	exit
 end
 
-colors=ColorGen.new
+colors=ColorRand.new
 colmap=Hash.new
 
 #Try to graph it. Each key in allsources will be a node
@@ -177,7 +181,8 @@ digraph do
 	label "Security Groups in #{THISREGION.upcase}"
 	allsources.keys.sort.each do |thissrc|
 		srcdesc=sghash.has_key?(thissrc) ? sghash[thissrc] : thissrc
-		colmap[srcdesc]=send(colors.getNext) unless colmap.has_key?(srcdesc)  
+		#colmap[srcdesc]=send(colors.getNext) unless colmap.has_key?(srcdesc)  
+		colmap[srcdesc]=colors.getNext
 		n=node(srcdesc)
 		n.attributes << colmap[srcdesc]
 		if srcdesc=~/^Host |^IP-Subnet /
@@ -198,13 +203,17 @@ digraph do
 			if thistgtdesc=~/^CacheGrp:/
 				t.attributes << trapezium + bold
 			else
-				colmap[thistgtdesc]=send(colors.getNext) unless colmap.has_key?(thistgt)
-				t.attributes << colmap[thistgtdesc] + filled
+				#colmap[thistgtdesc]=send(colors.getNext) unless colmap.has_key?(thistgt)
+				colmap[thistgtdesc]=colors.getNext
+				t.attributes << colmap[thistgtdesc] 
+				t.attributes << filled
 			end
 			edge(srcdesc, thistgtdesc).label(note).attributes << colmap[srcdesc] #Edge set to same color as SRC
 		end		
 	end
-
+	#x=node("srinivas")
+	#x.attributes << "color = \"#B4639D\""
+	#x.attributes << "style = striped"
 	save cli.config[:filename], cli.config[:format]
 end
 
