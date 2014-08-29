@@ -15,6 +15,8 @@ class Options
   option :json, :short => '-j', :long => '--json', :boolean => true, :default => false, :description => "Dump the JSON from which SVG/PNG is built"
   option :filename, :short => '-f FILENAME', :long => '--filename FILENAME', :default => "/tmp/sgmap", :description => "Filename (no svg/png suffix) to dump map into. Defaults to /tmp/sgmap(.svg)"
   option :format, :short => '-m FORMAT', :long => '--mode FORMAT', :default => 'svg', :description => "svg/png only - For generated graph. Defaults to svg"
+	option :no_ecache, :long => '--ecache-disable', :boolean => true, :default => false, :description => "Set to disable describing Elastic Cache security groups"
+	option :no_rds, :long => '--rds-disable', :boolean => true, :default => false, :description => "Set to disable describing RDS security groups"	
 end
 
 #Generate a new color each time so colors in SVG/PNG never repeat - Colors should be somewhat light...
@@ -129,8 +131,8 @@ DstRe=Regexp.new(cli.config[:dstre])
 abort "No region specified in config." if THISREGION.nil?
 
 ec2sec=describe_ec2_secgroup(THISREGION)
-cachesec=describe_cache_secgroup(THISREGION)
-rdssec=describe_rds_secgroup(THISREGION)
+cachesec=cli.config[:no_ecache] ? [] : describe_cache_secgroup(THISREGION)
+rdssec=cli.config[:no_rds] ? [] : describe_rds_secgroup(THISREGION)
 
 
 sghash=Hash.new #sg-xxx => sg-description

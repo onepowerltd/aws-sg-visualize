@@ -53,9 +53,9 @@ Usage: ./buildSecGroupMap.rb (options)
     -m, --mode FORMAT                svg/png only - For generated graph. Defaults to svg
     -h, --help                       Show this Help message.
     -j, --json                       Dump the JSON from which SVG/PNG is built
+        --ecache-disable             Set to disable describing Elastic Cache security groups
+        --rds-disable                Set to disable describing RDS security groups
     -n, --nograph                    Disable PNG/SVG object generation. False by default.
     -r, --region REGION              AWS Region for which to describe Security groups
     -s, --source SOURCE              Regexp to filter results to match by Source IP/Groups/Groupname. Default is to match all.
-
-
 ```
