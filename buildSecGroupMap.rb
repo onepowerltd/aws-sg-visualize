@@ -101,7 +101,8 @@ def describe_cache_secgroup(region="")
 		$stderr.puts "Describing Elastic Cache Security groups..."
 		return fogobj.describe_cache_security_groups.body['CacheSecurityGroups']
 	rescue Exception => e
-		abort "Failed to fetch Elastic Cache security groups! - #{e.inspect}"
+		$stderr.puts "Failed to fetch Elastic Cache security groups! - #{e.inspect}"
+		return []
 	end
 end
 
