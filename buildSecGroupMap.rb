@@ -17,16 +17,20 @@ class Options
   option :format, :short => '-m FORMAT', :long => '--mode FORMAT', :default => 'svg', :description => "svg/png only - For generated graph. Defaults to svg"
 end
 
+#Generate a new color each time so colors in SVG/PNG never repeat - Colors should be somewhat light...
 class ColorRand
-	def initialize
+	def initialize(tot=1729) #1729 ? :-)
 		@used=Hash.new
 	end
-
+	def getCol
+		return (0..2).map{"%0x" % (rand * 0x80 + 0x80)}.join
+	end
 	def getNext
-		thiscol="%06x" % (rand * 0xffffff)
+		thiscol=getCol
 		while ( @used.has_key?(thiscol))
-			thiscol="%06x" % (rand * 0xffffff)
-		end		
+			thiscol=getCol
+		end	
+		@used[thiscol]=nil	
 		return "color = \"##{thiscol}\""
 	end
 end
@@ -99,6 +103,20 @@ def describe_cache_secgroup(region="")
 	end
 end
 
+def describe_rds_secgroup(region="")
+	f=Fog::AWS::RDS.new(
+		:region => region,
+		:aws_access_key_id => ENV['AWS_ACCESS_KEY_ID'],
+		:aws_secret_access_key => ENV['AWS_SECRET_ACCESS_KEY']
+	)
+	begin
+		$stderr.puts "Describing RDS security groups..."
+		return f.describe_db_security_groups.body['DescribeDBSecurityGroupsResult']['DBSecurityGroups']
+	rescue Exception => e
+		abort "Failed to fetch RDS security groups! - #{e.inspect}"
+	end
+end
+
 ### Work starts here...
 
 #Parse cmdline opts.
@@ -112,15 +130,15 @@ abort "No region specified in config." if THISREGION.nil?
 
 ec2sec=describe_ec2_secgroup(THISREGION)
 cachesec=describe_cache_secgroup(THISREGION)
+rdssec=describe_rds_secgroup(THISREGION)
+
 
 sghash=Hash.new #sg-xxx => sg-description
 allsources=Hash.new
 cachesecmap=Hash.new #Elastic cache sec groups use lower case description of EC2 sec group name and not its ID :-( So map desc.lowcase -> sg-xxxx
 
-colorctr=0
 #First process all EC2 security group info.
 ec2sec.each do |thisg|
-	colorctr+=1
 	tgtgroupdesc=getGroupDesc(thisg)
 	sghash[ thisg['groupId' ] ]=tgtgroupdesc
 	cachesecmap[ thisg['groupName'].downcase ] = thisg['groupId']	#well, >1 groups could have the same description... :-(
@@ -130,7 +148,6 @@ ec2sec.each do |thisg|
 		proto_port_combo="ANY" if proto_port_combo=="-1:"
 		#The "source" could be either a IP subnet or another security group.
 		this_allowed['groups'].each do |x|
-			colorctr+=1
 			#srcid=getGroupDesc(x)	
 			if x.has_key?('userId') && x['userId']=='amazon-elb'
 				sghash[ x['groupId' ] ]=x['groupId'] + " (#{ELBDESC})"
@@ -142,7 +159,6 @@ ec2sec.each do |thisg|
 			allsources[srcid]['allowed_into'][tgtgroupdesc].push(proto_port_combo)			
 		end	
 		this_allowed['ipRanges'].each do |y|
-			colorctr+=1
 			srcid=getSubnetDesc(y['cidrIp'])
 			next unless srcid.match(SrcRe)
 			allsources[srcid]={'allowed_into'=>Hash.new} unless allsources.has_key?(srcid)
@@ -155,15 +171,36 @@ end
 
 #Now process the elastic cache security groups too
 cachesec.each do |thiscgrp|
-	colorctr+=1
 	gname=thiscgrp['CacheSecurityGroupName']
 	thiscgrp['EC2SecurityGroups'].each do |ec2grp|
 		name=ec2grp['EC2SecurityGroupName']
 		id=cachesecmap.has_key?(name) ? cachesecmap[name] : name
 		allsources[id]={'allowed_into' => Hash.new} unless allsources.has_key?(id)
-		allsources[id]['allowed_into']['CacheGrp:'+name]=[] unless allsources[id]['allowed_into'].has_key?('CacheGrp:'+name)
-		allsources[id]['allowed_into']['CacheGrp:'+name].push('cache')	
+		allsources[id]['allowed_into']['CacheGrp:'+gname]=[] unless allsources[id]['allowed_into'].has_key?('CacheGrp:'+gname)
+		allsources[id]['allowed_into']['CacheGrp:'+gname].push('cache')	
 	end	
+end
+
+#Then RDS security groups
+rdssec.each do |thisgrp|
+	gname=thisgrp['DBSecurityGroupName']
+	#Sources could be ec2 sec groups or IP ranges
+	thisgrp['EC2SecurityGroups'].each do |eg|
+		name=eg['EC2SecurityGroupName']
+		id=cachesecmap.has_key?(name) ? cachesecmap[name] : name
+		#$stderr.puts "SG #{name} => #{id}"	
+		allsources[id]={'allowed_into' => Hash.new} unless allsources.has_key?(id)
+		allsources[id]['allowed_into']['RdsGrp:'+gname]=[] unless allsources[id]['allowed_into'].has_key?('RdsGrp:'+gname)
+		allsources[id]['allowed_into']['RdsGrp:'+gname].push('rds')		
+	end
+				
+	thisgrp['IPRanges'].each do |ipr|
+		id=getSubnetDesc(ipr['CIDRIP'])
+		#$stderr.puts "IP #{ipr['CIDRIP']} => #{id}"	
+		allsources[id]={'allowed_into' => Hash.new} unless allsources.has_key?(id)
+		allsources[id]['allowed_into']['RdsGrp:'+gname]=[] unless allsources[id]['allowed_into'].has_key?('RdsGrp:'+gname)
+		allsources[id]['allowed_into']['RdsGrp:'+gname].push('rds')			
+	end
 end
 
 puts JSON.pretty_generate(allsources) if cli.config[:json]
@@ -171,7 +208,6 @@ if cli.config[:nograph]
 	$stderr.puts "Skipping SVG/PNG generation since nograph was set"
 	exit
 end
-
 colors=ColorRand.new
 colmap=Hash.new
 
@@ -202,6 +238,10 @@ digraph do
 			t=node(thistgtdesc)
 			if thistgtdesc=~/^CacheGrp:/
 				t.attributes << trapezium + bold
+			elsif thistgtdesc=~/^RdsGrp:/
+				colmap[thistgtdesc]=colors.getNext
+				t.attributes << tab + bold + filled
+				t.attributes << colmap[thistgtdesc]
 			else
 				#colmap[thistgtdesc]=send(colors.getNext) unless colmap.has_key?(thistgt)
 				colmap[thistgtdesc]=colors.getNext
@@ -211,9 +251,7 @@ digraph do
 			edge(srcdesc, thistgtdesc).label(note).attributes << colmap[srcdesc] #Edge set to same color as SRC
 		end		
 	end
-	#x=node("srinivas")
-	#x.attributes << "color = \"#B4639D\""
-	#x.attributes << "style = striped"
+	
 	save cli.config[:filename], cli.config[:format]
 end
 
