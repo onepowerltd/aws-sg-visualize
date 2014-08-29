@@ -1,19 +1,37 @@
 Visualize AWS Security groups for a region
 ==========================================
 
+A picture is worth a thousand words right? This lets you build a SVG of the EC2, RDS and Elastic Cache security groups in a given EC2 region.
 
-
+1. Runs describe-security groups against specified regions EC2, RDS and Elastic Cache.
+2. Based on the described groups, builds a sources hash and converts them to a directional graph (always `Source` to `Destination`).
+3. Renders the graph as SVG/PNG via [the very awesome Graphviz](http://www.graphviz.org/)
+4. For a bit of high level overview without having to read through it all, Hosts/IP blocks as diamonds, RDS groups as parallelograms and Elastic Cache groups as trapeziums.
 
 Prerequisites
 =============
 
 Need graphviz installed.
 
-```
+On OSX -
 
+```
 brew install graphviz
 
 ```
+
+On Ubuntu -
+
+```
+
+apt-get install graphviz
+
+
+```
+
+An Amazon EC2 account with admin privileges and API keys setup. These will need to be available as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for script to run.
+
+You will also need the Ruby Gems `fog`, `graph` and `mizlib-cli` - The `bundle install` should take care of those for you.
 
 Install
 =======
@@ -23,8 +41,8 @@ Clone from this repo and run `bundle install` to install the required gems (Name
 
 ```
 
-git clone XXX
-cd xxx
+git clone git@github.com:onepowerltd/aws-sg-visualize.git
+cd aws-sg-visualize
 bundle install
 
 ```
@@ -58,4 +76,12 @@ Usage: ./buildSecGroupMap.rb (options)
     -n, --nograph                    Disable PNG/SVG object generation. False by default.
     -r, --region REGION              AWS Region for which to describe Security groups
     -s, --source SOURCE              Regexp to filter results to match by Source IP/Groups/Groupname. Default is to match all.
+
 ```
+
+
+Known Issues
+============
+
+* Colors chosen are not perfect - Not exactly eye-candy :-)
+* As mentioned in [Issue 1](https://github.com/onepowerltd/aws-sg-visualize/issues/1), describing VPC elastic-cache groups throws an error. Will get to it soon. Works fine in classic EC2.
