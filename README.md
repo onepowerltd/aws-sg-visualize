@@ -8,6 +8,10 @@ A picture is worth a thousand words right? This lets you build a SVG of the EC2,
 3. Renders the graph as SVG/PNG via [the very awesome Graphviz](http://www.graphviz.org/)
 4. For a bit of high level overview without having to read through it all, Hosts/IP blocks as diamonds, RDS groups as parallelograms and Elastic Cache groups as trapeziums.
 
+Here is a sample (albeit with very few groups - Not gonna post a real accounts 'network diagram' in here :-))
+
+![Alt text](/demo.png "Sample SVG")
+
 Prerequisites
 =============
 
