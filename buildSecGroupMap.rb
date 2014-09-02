@@ -109,7 +109,7 @@ def describe_elasticips(regionlist="",instanceinfo=true)
 		begin
 			$stderr.puts "Fetching ElasticIPs in #{thisr} (And associate them with instance Names)"
 			fogobj.describe_addresses.body['addressesSet'].each do |eip|
-				rhash[ eip['publicIp'] ] = eip['instanceId'] || "#{eip['publicIp']}/#{thisr}"
+				rhash[ eip['publicIp'] ] = eip['instanceId'] || "UNMAPPED/#{eip['publicIp']}/#{thisr}"
 			end
 			#Fetch instance Name?
 			if instanceinfo
@@ -120,11 +120,11 @@ def describe_elasticips(regionlist="",instanceinfo=true)
 				end	
 				rhash.keys.each do |thisi|
 					if rhash[thisi]=~/^i-/ && namehash.has_key?(rhash[thisi])
-						puts "#{thisr} : #{thisi} => #{rhash[thisi]} => #{namehash[ rhash[thisi] ]}"
+						#puts "#{thisr} : #{thisi} => #{rhash[thisi]} => #{namehash[ rhash[thisi] ]}"
 						id=rhash[thisi]
 						rhash[thisi]="#{thisi}/#{namehash[id]}"	
-					else
-						puts "#{thisr} : #{thisi} => #{rhash[thisi]} => NO"	
+					#else
+					#	puts "#{thisr} : #{thisi} => #{rhash[thisi]} => NO"	
 					end	
 				end	
 			end		
@@ -133,7 +133,7 @@ def describe_elasticips(regionlist="",instanceinfo=true)
 		end
 		eiphash.merge!(rhash)
 	end	
-	puts JSON.pretty_generate(eiphash)
+	#puts JSON.pretty_generate(eiphash)
 	return eiphash
 end
 

@@ -7,6 +7,7 @@ A picture is worth a thousand words right? This lets you build a SVG of the EC2,
 2. Based on the described groups, builds a sources hash and converts them to a directional graph (always `Source` to `Destination`).
 3. Renders the graph as SVG/PNG via [the very awesome Graphviz](http://www.graphviz.org/)
 4. For a bit of high level overview without having to read through it all, Hosts/IP blocks as diamonds, RDS groups as parallelograms and Elastic Cache groups as trapeziums.
+5. If you leave `--no_meta` at default (`false`), then this will also poll all EC2 elastic IP addresses (in all regions specified as `--allregions r1,r2,r3..`) and "convert" them to something like `EC2 <eip>/<nodes name tag>/<AZ>` etc.
 
 Here is a sample (albeit with very few groups - Not gonna post a real accounts 'network diagram' in here :-))
 
@@ -35,7 +36,7 @@ apt-get install graphviz
 
 An Amazon EC2 account with admin privileges and API keys setup. These will need to be available as `AWS_ACCESS_KEY_ID` and `AWS_SECRET_ACCESS_KEY` for script to run.
 
-You will also need the Ruby Gems `fog`, `graph` and `mizlib-cli` - The `bundle install` should take care of those for you.
+You will also need the Ruby Gems `fog`, `graph` and `mixlib-cli` - The `bundle install` should take care of those for you.
 
 Install
 =======
@@ -68,17 +69,20 @@ You can always filter by source/dest IP/group names/descriptions etc and dump th
 
 ```
 
-[smohan@Srinivasans-MacBook-Pro aws-sg-visualize]$ ./buildSecGroupMap.rb -h
+[smohan@Srinivasans-MacBook-Pro-3 aws-sg-visualize]$ ./buildSecGroupMap.rb -h
 Usage: ./buildSecGroupMap.rb (options)
-    -d, --dest DEST                  Regexp to filter results to match by Destination SecGroup. Default is to match all.
+        --allregions us-west-1,us-east-1
+                                     Comma separated list of AWS regions you want to poll for elastic IP mappings
+    -d, --dest DEST                  Regexp to filter results to match by Destination Group name. Default is to match all.
     -f, --filename FILENAME          Filename (no svg/png suffix) to dump map into. Defaults to /tmp/sgmap(.svg)
     -m, --mode FORMAT                svg/png only - For generated graph. Defaults to svg
     -h, --help                       Show this Help message.
     -j, --json                       Dump the JSON from which SVG/PNG is built
         --ecache-disable             Set to disable describing Elastic Cache security groups
+        --no_meta                    Disables EC2 instance meta-data fetch (To resolve elastic IPs to ec2 host). Defaults to false
         --rds-disable                Set to disable describing RDS security groups
     -n, --nograph                    Disable PNG/SVG object generation. False by default.
-    -r, --region REGION              AWS Region for which to describe Security groups
+    -r, --region REGION              AWS Region for which to describe Security groups. Defaults to us-west-2
     -s, --source SOURCE              Regexp to filter results to match by Source IP/Groups/Groupname. Default is to match all.
 
 ```
