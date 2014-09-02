@@ -5,6 +5,9 @@ require 'digest/md5'
 require 'graph'
 require 'mixlib/cli'
 
+#We could build list from describe-regions, but that would be another call. Use this list if user provides none.
+ALLREGIONS="eu-west-1,sa-east-1,us-east-1,ap-northeast-1,us-west-2,us-west-1,ap-southeast-1,ap-southeast-2"
+
 class Options
   include Mixlib::CLI
   option :region, :short =>'-r REGION', :long => '--region REGION',:default => 'us-west-2',:description => "AWS Region for which to describe Security groups. Defaults to us-west-2"
@@ -16,7 +19,9 @@ class Options
   option :filename, :short => '-f FILENAME', :long => '--filename FILENAME', :default => "/tmp/sgmap", :description => "Filename (no svg/png suffix) to dump map into. Defaults to /tmp/sgmap(.svg)"
   option :format, :short => '-m FORMAT', :long => '--mode FORMAT', :default => 'svg', :description => "svg/png only - For generated graph. Defaults to svg"
 	option :no_ecache, :long => '--ecache-disable', :boolean => true, :default => false, :description => "Set to disable describing Elastic Cache security groups"
-	option :no_rds, :long => '--rds-disable', :boolean => true, :default => false, :description => "Set to disable describing RDS security groups"	
+	option :no_rds, :long => '--rds-disable', :boolean => true, :default => false, :description => "Set to disable describing RDS security groups"
+	option :allregions, :long => '--allregions us-west-1,us-east-1', :default => ALLREGIONS, :description => "Comma separated list of AWS regions you want to poll for elastic IP mappings"	
+	option :no_meta, :long => '--no_meta', :boolean => true, :default => false, :description => "Disables EC2 instance meta-data fetch (To resolve elastic IPs to ec2 host). Defaults to false"
 end
 
 #Generate a new color each time so colors in SVG/PNG never repeat - Colors should be somewhat light...
@@ -48,14 +53,15 @@ def getGroupDesc(x=Hash.new)
 	return (x.has_key?('groupName') && !x['groupName'].empty? ? "#{x['groupId']} (#{x['groupName']})" : "#{x['groupId']}")
 end
 
-def getSubnetDesc(x="")
+#This is a little crude when trying to map IP to a (maybe) known Elastic IP.
+def getSubnetDesc(x="",ipmap=Hash.new)
 	ret="NA"
 	if x.nil? || x.empty?
 		ret="NA"
 	else	
 		ip, maskbits = x.split('/')
 		if maskbits.to_i==32 #Bah, assuming ipv4 only for now.
-			ret="Host #{ip}"
+			ret=ipmap.has_key?(ip) ? "EC2 #{ipmap[ip]}" : "Host #{ip}"
 		else
 			ret="IP-Subnet #{ip}/#{maskbits}"
 		end
@@ -89,6 +95,46 @@ def describe_ec2_secgroup(region="")
 	rescue Exception => e
 		abort "Failed to fetch EC2 sec groups! - #{e.inspect}"
 	end		
+end
+
+def describe_elasticips(regionlist="",instanceinfo=true)
+	eiphash=Hash.new #IP => "region:instanceid", instanceid may be NA for eip thats not mapped to an instance.
+	regionlist.split(',').each do |thisr|
+		rhash=Hash.new
+		thisr.gsub!(/\s/,'')
+		fogobj = Fog::Compute.new(
+			:provider => 'AWS',:region => thisr,
+			:aws_access_key_id => ENV['AWS_ACCESS_KEY_ID'],:aws_secret_access_key => ENV['AWS_SECRET_ACCESS_KEY']
+		)	
+		begin
+			$stderr.puts "Fetching ElasticIPs in #{thisr} (And associate them with instance Names)"
+			fogobj.describe_addresses.body['addressesSet'].each do |eip|
+				rhash[ eip['publicIp'] ] = eip['instanceId'] || "#{eip['publicIp']}/#{thisr}"
+			end
+			#Fetch instance Name?
+			if instanceinfo
+				namehash=Hash.new
+				svrs=fogobj.servers({'instance-id' => rhash.values.reject {|i| !i=~/^i-/} })
+				svrs.each do |s|
+					namehash[s.id]="#{s.tags["Name"]}/#{s.availability_zone}"	
+				end	
+				rhash.keys.each do |thisi|
+					if rhash[thisi]=~/^i-/ && namehash.has_key?(rhash[thisi])
+						puts "#{thisr} : #{thisi} => #{rhash[thisi]} => #{namehash[ rhash[thisi] ]}"
+						id=rhash[thisi]
+						rhash[thisi]="#{thisi}/#{namehash[id]}"	
+					else
+						puts "#{thisr} : #{thisi} => #{rhash[thisi]} => NO"	
+					end	
+				end	
+			end		
+		rescue Exception => e
+			$stderr.puts "Failed to fetch ElasticIPs for region #{thisr} - #{e.inspect}"
+		end
+		eiphash.merge!(rhash)
+	end	
+	puts JSON.pretty_generate(eiphash)
+	return eiphash
 end
 
 def describe_cache_secgroup(region="")
@@ -139,6 +185,9 @@ rdssec=cli.config[:no_rds] ? [] : describe_rds_secgroup(THISREGION)
 sghash=Hash.new #sg-xxx => sg-description
 allsources=Hash.new
 cachesecmap=Hash.new #Elastic cache sec groups use lower case description of EC2 sec group name and not its ID :-( So map desc.lowcase -> sg-xxxx
+$stderr.puts "*** Not fetching EC2 instance names since --no_meta is true ***" if cli.config[:no_meta]
+eipmap=describe_elasticips(cli.config[:allregions], !cli.config[:no_meta])
+
 
 #First process all EC2 security group info.
 ec2sec.each do |thisg|
@@ -162,7 +211,7 @@ ec2sec.each do |thisg|
 			allsources[srcid]['allowed_into'][tgtgroupdesc].push(proto_port_combo)			
 		end	
 		this_allowed['ipRanges'].each do |y|
-			srcid=getSubnetDesc(y['cidrIp'])
+			srcid=getSubnetDesc(y['cidrIp'],eipmap)
 			next unless srcid.match(SrcRe)
 			allsources[srcid]={'allowed_into'=>Hash.new} unless allsources.has_key?(srcid)
 			allsources[srcid]['allowed_into'][tgtgroupdesc]=[] unless allsources[srcid]['allowed_into'].has_key?(tgtgroupdesc)
@@ -198,7 +247,7 @@ rdssec.each do |thisgrp|
 	end
 				
 	thisgrp['IPRanges'].each do |ipr|
-		id=getSubnetDesc(ipr['CIDRIP'])
+		id=getSubnetDesc(ipr['CIDRIP'],eipmap)
 		#$stderr.puts "IP #{ipr['CIDRIP']} => #{id}"	
 		allsources[id]={'allowed_into' => Hash.new} unless allsources.has_key?(id)
 		allsources[id]['allowed_into']['RdsGrp:'+gname]=[] unless allsources[id]['allowed_into'].has_key?('RdsGrp:'+gname)
@@ -224,7 +273,7 @@ digraph do
 		colmap[srcdesc]=colors.getNext
 		n=node(srcdesc)
 		n.attributes << colmap[srcdesc]
-		if srcdesc=~/^Host |^IP-Subnet /
+		if srcdesc=~/^(Host|^IP-Subnet|EC2) /
 			n.attributes << bold + diagonals
 			mdiamond << n
 		elsif srcdesc=~/amazon-elb-sg/
