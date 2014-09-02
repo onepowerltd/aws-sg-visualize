@@ -45,6 +45,30 @@ end
 ELBDESC='amazon-elb-sg'
 ANYWHERE='0.0.0.0/0'
 
+#Read ~/.aws-sg-visualize/hostmap to map known IP addresses/subnets to some description.
+#Any IP/subnet here overrides what was obtained from ec2 describe-elasticip-addresses
+def hostmap
+	path=File.expand_path("~/.aws-sg-visualize")
+	Dir.mkdir(path) unless File.directory?(path)
+	hostsfile=path+"/hostmap"
+	return Hash.new unless File.exists?(hostsfile)
+	hmap=Hash.new
+	begin
+		File.open(hostsfile,"r").read.split("\n").each do |i|
+			i.chomp!
+			if i=~/^\s*(\d+\.\d+\.\d+\.\d+)\/(\d+)\s+(.*)/
+				net, bits, desc = [$1, $2, $3]
+				hmap["#{net}/#{bits}"]="IP-Subnet #{net}/#{bits} #{desc}"							
+			elsif i=~/^\s*(\d+\.\d+\.\d+\.\d+)\s+(.*)/
+				hmap[$1]="Host #{$1}/#{$2}"	
+			end
+		end
+	rescue Exception => e
+		$stderr.puts "Could not read #{hostsfile} - #{e.inspect}"
+	end	
+	return hmap	
+end
+
 def md5(str="")
 	return Digest::MD5.hexdigest(str)
 end
@@ -61,9 +85,9 @@ def getSubnetDesc(x="",ipmap=Hash.new)
 	else	
 		ip, maskbits = x.split('/')
 		if maskbits.to_i==32 #Bah, assuming ipv4 only for now.
-			ret=ipmap.has_key?(ip) ? "EC2 #{ipmap[ip]}" : "Host #{ip}"
+			ret=ipmap.has_key?(ip) ? ipmap[ip] : "Host #{ip}"
 		else
-			ret="IP-Subnet #{ip}/#{maskbits}"
+			ret=ipmap.has_key?(x) ? ipmap[x]: "IP-Subnet #{x}"
 		end
 	end
 	return ret
@@ -109,7 +133,7 @@ def describe_elasticips(regionlist="",instanceinfo=true)
 		begin
 			$stderr.puts "Fetching ElasticIPs in #{thisr} (And associate them with instance Names)"
 			fogobj.describe_addresses.body['addressesSet'].each do |eip|
-				rhash[ eip['publicIp'] ] = eip['instanceId'] || "UNMAPPED/#{eip['publicIp']}/#{thisr}"
+				rhash[ eip['publicIp'] ] = eip['instanceId'] || "EC2 UNMAPPED/#{eip['publicIp']}/#{thisr}"
 			end
 			#Fetch instance Name?
 			if instanceinfo
@@ -122,7 +146,7 @@ def describe_elasticips(regionlist="",instanceinfo=true)
 					if rhash[thisi]=~/^i-/ && namehash.has_key?(rhash[thisi])
 						#puts "#{thisr} : #{thisi} => #{rhash[thisi]} => #{namehash[ rhash[thisi] ]}"
 						id=rhash[thisi]
-						rhash[thisi]="#{thisi}/#{namehash[id]}"	
+						rhash[thisi]="EC2 #{thisi}/#{namehash[id]}"	
 					#else
 					#	puts "#{thisr} : #{thisi} => #{rhash[thisi]} => NO"	
 					end	
@@ -171,7 +195,7 @@ end
 #Parse cmdline opts.
 cli=Options.new
 cli.parse_options
-
+abort "Nothing to do. Either --json must be true or --nograph must be false" unless (cli.config[:json] || !cli.config[:nograph]) 
 THISREGION=cli.config[:region]
 SrcRe=Regexp.new(cli.config[:srcre])
 DstRe=Regexp.new(cli.config[:dstre])
@@ -187,7 +211,7 @@ allsources=Hash.new
 cachesecmap=Hash.new #Elastic cache sec groups use lower case description of EC2 sec group name and not its ID :-( So map desc.lowcase -> sg-xxxx
 $stderr.puts "*** Not fetching EC2 instance names since --no_meta is true ***" if cli.config[:no_meta]
 eipmap=describe_elasticips(cli.config[:allregions], !cli.config[:no_meta])
-
+eipmap.merge!(hostmap) #Read host/subnet => User provided description
 
 #First process all EC2 security group info.
 ec2sec.each do |thisg|
@@ -219,7 +243,6 @@ ec2sec.each do |thisg|
 		end				
 	end	
 end
-
 
 #Now process the elastic cache security groups too
 cachesec.each do |thiscgrp|
@@ -303,7 +326,7 @@ digraph do
 			edge(srcdesc, thistgtdesc).label(note).attributes << colmap[srcdesc] #Edge set to same color as SRC
 		end		
 	end
-	
+		
 	save cli.config[:filename], cli.config[:format]
 end
 

@@ -8,6 +8,20 @@ A picture is worth a thousand words right? This lets you build a SVG of the EC2,
 3. Renders the graph as SVG/PNG via [the very awesome Graphviz](http://www.graphviz.org/)
 4. For a bit of high level overview without having to read through it all, Hosts/IP blocks as diamonds, RDS groups as parallelograms and Elastic Cache groups as trapeziums.
 5. If you leave `--no_meta` at default (`false`), then this will also poll all EC2 elastic IP addresses (in all regions specified as `--allregions r1,r2,r3..`) and "convert" them to something like `EC2 <eip>/<nodes name tag>/<AZ>` etc.
+6. Any EC2 IP thats not allocated to an instance will show up with text `UNMAPPED`.
+7. If you would like to attach descriptions for static IP addresses / subnets (e.g. your corporate network) to the PNG/SVG, then edit/create `~/.aws-sg-visualize/hostmap` and add one line for each e.g. like this:
+
+```
+
+[smohan@Srinivasans-MacBook-Pro-3 aws-sg-visualize]$ cat ~/.aws-sg-visualize/hostmap
+#My rackspace host
+1.2.3.4 rspace1
+#Work/office subnet
+5.6.7.0/24 CorpNetwork1
+
+```
+
+** Any IP addresses defined in `~/.aws-sg-visualize/hostmap` will override information fetched from EC2 (describe elastic IP addresses) **
 
 Here is a sample (albeit with very few groups - Not gonna post a real accounts 'network diagram' in here :-))
 
