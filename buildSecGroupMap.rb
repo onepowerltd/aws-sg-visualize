@@ -73,8 +73,15 @@ def md5(str="")
 	return Digest::MD5.hexdigest(str)
 end
 
-def getGroupDesc(x=Hash.new)
-	return (x.has_key?('groupName') && !x['groupName'].empty? ? "#{x['groupId']} (#{x['groupName']})" : "#{x['groupId']}")
+def getGroupDesc(x=Hash.new,count=0)
+	ret=x['groupId']
+	if x.has_key?('groupName') && !x['groupName'].empty?
+		ret=count.nil? ? "#{ret} \n(#{x['groupName']})" : "#{ret} (Nodes=#{count})\n(#{x['groupName']})"
+	else
+		ret+=" (Nodes=#{count})" unless count.nil?	
+	end		
+	return ret
+	#return (x.has_key?('groupName') && !x['groupName'].empty? ? "#{x['groupId']} (Nodes=#{count})\n(#{x['groupName']})" : "#{x['groupId']} (Nodes=#{count}")
 end
 
 #This is a little crude when trying to map IP to a (maybe) known Elastic IP.
@@ -123,6 +130,7 @@ end
 
 def describe_elasticips(regionlist="",instanceinfo=true)
 	eiphash=Hash.new #IP => "region:instanceid", instanceid may be NA for eip thats not mapped to an instance.
+	subnetnodecount=Hash.new
 	regionlist.split(',').each do |thisr|
 		rhash=Hash.new
 		thisr.gsub!(/\s/,'')
@@ -133,22 +141,23 @@ def describe_elasticips(regionlist="",instanceinfo=true)
 		begin
 			$stderr.puts "Fetching ElasticIPs in #{thisr} (And associate them with instance Names)"
 			fogobj.describe_addresses.body['addressesSet'].each do |eip|
-				rhash[ eip['publicIp'] ] = eip['instanceId'] || "EC2 UNMAPPED/#{eip['publicIp']}/#{thisr}"
+				rhash[ eip['publicIp'] ] = "EC2 #{eip['publicIp']}/#{eip['instanceId']}/#{thisr}" || "EC2 UNMAPPED/#{eip['publicIp']}/#{thisr}"
 			end
 			#Fetch instance Name?
 			if instanceinfo
 				namehash=Hash.new
-				svrs=fogobj.servers({'instance-id' => rhash.values.reject {|i| !i=~/^i-/} })
+				svrs=fogobj.servers #({'instance-id' => rhash.values.reject {|i| !i=~/^i-/} })
 				svrs.each do |s|
 					namehash[s.id]="#{s.tags["Name"]}/#{s.availability_zone}"	
+					s.security_group_ids.each do |sg|
+						subnetnodecount[sg]=0 unless subnetnodecount.has_key?(sg)
+						subnetnodecount[sg]+=1
+					end	
 				end	
 				rhash.keys.each do |thisi|
 					if rhash[thisi]=~/^i-/ && namehash.has_key?(rhash[thisi])
-						#puts "#{thisr} : #{thisi} => #{rhash[thisi]} => #{namehash[ rhash[thisi] ]}"
 						id=rhash[thisi]
 						rhash[thisi]="EC2 #{thisi}/#{namehash[id]}"	
-					#else
-					#	puts "#{thisr} : #{thisi} => #{rhash[thisi]} => NO"	
 					end	
 				end	
 			end		
@@ -158,7 +167,7 @@ def describe_elasticips(regionlist="",instanceinfo=true)
 		eiphash.merge!(rhash)
 	end	
 	#puts JSON.pretty_generate(eiphash)
-	return eiphash
+	return [eiphash, subnetnodecount]
 end
 
 def describe_cache_secgroup(region="")
@@ -210,12 +219,13 @@ sghash=Hash.new #sg-xxx => sg-description
 allsources=Hash.new
 cachesecmap=Hash.new #Elastic cache sec groups use lower case description of EC2 sec group name and not its ID :-( So map desc.lowcase -> sg-xxxx
 $stderr.puts "*** Not fetching EC2 instance names since --no_meta is true ***" if cli.config[:no_meta]
-eipmap=describe_elasticips(cli.config[:allregions], !cli.config[:no_meta])
+eipmap,sgnodecount = describe_elasticips(cli.config[:allregions], !cli.config[:no_meta])
+#subnetnodecount has sg-XX => instancecount
 eipmap.merge!(hostmap) #Read host/subnet => User provided description
 
 #First process all EC2 security group info.
 ec2sec.each do |thisg|
-	tgtgroupdesc=getGroupDesc(thisg)
+	tgtgroupdesc=getGroupDesc(thisg, cli.config[:no_meta] ? nil: sgnodecount[thisg['groupId']] )
 	sghash[ thisg['groupId' ] ]=tgtgroupdesc
 	cachesecmap[ thisg['groupName'].downcase ] = thisg['groupId']	#well, >1 groups could have the same description... :-(
 	next unless tgtgroupdesc.match(DstRe)
