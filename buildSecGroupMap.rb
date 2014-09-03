@@ -76,7 +76,7 @@ end
 def getGroupDesc(x=Hash.new,count=0)
 	ret=x['groupId']
 	if x.has_key?('groupName') && !x['groupName'].empty?
-		ret=count.nil? ? "#{ret} \n(#{x['groupName']})" : "#{ret} (Nodes=#{count})\n(#{x['groupName']})"
+		ret=count.nil? ? "#{ret} \n#{x['groupName']}" : "#{ret} (#Nodes=#{count})\n#{x['groupName']}"
 	else
 		ret+=" (Nodes=#{count})" unless count.nil?	
 	end		
@@ -131,6 +131,7 @@ end
 def describe_elasticips(regionlist="",instanceinfo=true)
 	eiphash=Hash.new #IP => "region:instanceid", instanceid may be NA for eip thats not mapped to an instance.
 	subnetnodecount=Hash.new
+	$stderr.print "Fetching ElasticIPs for "	
 	regionlist.split(',').each do |thisr|
 		rhash=Hash.new
 		thisr.gsub!(/\s/,'')
@@ -139,9 +140,10 @@ def describe_elasticips(regionlist="",instanceinfo=true)
 			:aws_access_key_id => ENV['AWS_ACCESS_KEY_ID'],:aws_secret_access_key => ENV['AWS_SECRET_ACCESS_KEY']
 		)	
 		begin
-			$stderr.puts "Fetching ElasticIPs in #{thisr} (And associate them with instance Names)"
+			$stderr.print "#{thisr} "
 			fogobj.describe_addresses.body['addressesSet'].each do |eip|
-				rhash[ eip['publicIp'] ] = "EC2 #{eip['publicIp']}/#{eip['instanceId']}/#{thisr}" || "EC2 UNMAPPED/#{eip['publicIp']}/#{thisr}"
+				#rhash[ eip['publicIp'] ] = "EC2 #{eip['publicIp']}/#{eip['instanceId']}/#{thisr}" || "EC2 #{eip['publicIp']}/UNMAPPED/#{thisr}"
+				rhash[ eip['publicIp'] ] = eip['instanceId'] ? eip['instanceId'] : "EC2 #{eip['publicIp']}/UNMAPPED/#{thisr}" 	
 			end
 			#Fetch instance Name?
 			if instanceinfo
@@ -165,7 +167,8 @@ def describe_elasticips(regionlist="",instanceinfo=true)
 			$stderr.puts "Failed to fetch ElasticIPs for region #{thisr} - #{e.inspect}"
 		end
 		eiphash.merge!(rhash)
-	end	
+	end
+	$stderr.puts ""	
 	#puts JSON.pretty_generate(eiphash)
 	return [eiphash, subnetnodecount]
 end
