@@ -1,9 +1,10 @@
-#!/usr/local/bin/ruby
+#!/usr/bin/env ruby
 require 'json'
 require 'fog'
 require 'digest/md5'
 require 'graph'
 require 'mixlib/cli'
+require 'pp'
 
 #We could build list from describe-regions, but that would be another call. Use this list if user provides none.
 ALLREGIONS="eu-west-1,sa-east-1,us-east-1,ap-northeast-1,us-west-2,us-west-1,ap-southeast-1,ap-southeast-2"
@@ -11,6 +12,7 @@ ALLREGIONS="eu-west-1,sa-east-1,us-east-1,ap-northeast-1,us-west-2,us-west-1,ap-
 class Options
   include Mixlib::CLI
   option :region, :short =>'-r REGION', :long => '--region REGION',:default => 'us-west-2',:description => "AWS Region for which to describe Security groups. Defaults to us-west-2"
+  option :vpcre, :short => '-V VPC', :long => '--vpc-id VPC', :default => '.*', :description => 'Regexp to filter VPC ID. Default is .*'
   option :srcre, :short => '-s SRC', :long => '--source SOURCE', :default => '.*', :description => 'Regexp to filter results to match by Source IP/Groups/Groupname. Default is to match all.'
   option :dstre, :short => '-d DEST', :long => '--dest DEST', :default => '.*', :description => 'Regexp to filter results to match by Destination Group name. Default is to match all.'
   option :help, :short =>'-h', :long => '--help', :boolean => true, :default => false, :description => "Show this Help message.", :show_options => true, :exit => 0
@@ -105,7 +107,7 @@ def groupByProto(x=Array.new)
 	x.each do |thispp|
 		proto, port = thispp.split(":")
 		proto.upcase!
-		port=(port.nil? || port.empty?) ? "ANY" : port.to_i
+		port=(port.nil? || port.empty?) ? "ANY" : port.to_s
 		grouped[proto]=[] unless grouped.has_key?(proto)
 		grouped[proto].push(port)
 	end
@@ -211,6 +213,7 @@ abort "Nothing to do. Either --json must be true or --nograph must be false" unl
 THISREGION=cli.config[:region]
 SrcRe=Regexp.new(cli.config[:srcre])
 DstRe=Regexp.new(cli.config[:dstre])
+VpcRe=Regexp.new(cli.config[:vpcre])
 abort "No region specified in config." if THISREGION.nil?
 
 ec2sec=describe_ec2_secgroup(THISREGION)
@@ -232,8 +235,11 @@ ec2sec.each do |thisg|
 	sghash[ thisg['groupId' ] ]=tgtgroupdesc
 	cachesecmap[ thisg['groupName'].downcase ] = thisg['groupId']	#well, >1 groups could have the same description... :-(
 	next unless tgtgroupdesc.match(DstRe)
+    next unless thisg['vpcId'].match(VpcRe)
 	thisg['ipPermissions'].each do |this_allowed|
-		proto_port_combo=this_allowed['ipProtocol']+":"+this_allowed['toPort'].to_s
+		proto_port_combo=this_allowed['ipProtocol']+":"
+        proto_port_combo+="#{this_allowed['fromPort'].to_s}-" if this_allowed['fromPort'] < this_allowed['toPort'] unless this_allowed['fromPort'].nil?
+        proto_port_combo+=this_allowed['toPort'].to_s
 		proto_port_combo="ANY" if proto_port_combo=="-1:"
 		#The "source" could be either a IP subnet or another security group.
 		this_allowed['groups'].each do |x|
@@ -336,6 +342,7 @@ digraph do
 				t.attributes << colmap[thistgtdesc] 
 				t.attributes << filled
 			end
+			edge(srcdesc, thistgtdesc).label(note).attributes << decorate("true")
 			edge(srcdesc, thistgtdesc).label(note).attributes << colmap[srcdesc] #Edge set to same color as SRC
 		end		
 	end
